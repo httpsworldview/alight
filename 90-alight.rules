@@ -1,0 +1,4 @@
+# Grant the video group read/write access to backlight brightness.
+SUBSYSTEM=="backlight", TEST=="brightness", \
+	RUN+="/bin/chgrp video /sys%p/brightness", \
+	RUN+="/bin/chmod g+rw /sys%p/brightness"
