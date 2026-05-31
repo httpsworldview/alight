@@ -1,3 +1,8 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * Copyright (C) 2026 Maika Namuo
+ */
+
 #include <dirent.h>
 #include <err.h>
 #include <errno.h>

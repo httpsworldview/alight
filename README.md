@@ -35,8 +35,9 @@ doas udevadm control --reload-rules
 doas udevadm trigger --subsystem-match=backlight --settle
 ```
 
-Defaults: `/usr/local/bin` and `/etc/udev/rules.d`. Override `PREFIX`,
-`BINDIR`, `UDEVDIR`, or `DESTDIR` as needed.
+Defaults: `/usr/local/bin`, `/etc/udev/rules.d`, and
+`/usr/local/share/licenses/alight`. Override `PREFIX`, `BINDIR`,
+`UDEVDIR`, `LICENSEDIR`, or `DESTDIR` as needed.
 
 The udev rule gives the `video` group read/write access to backlight
 `brightness` files using `/bin/chgrp` and `/bin/chmod`; adjust
@@ -48,3 +49,10 @@ The udev rule gives the `video` group read/write access to backlight
 doas make uninstall
 make clean
 ```
+
+## License
+
+Copyright (C) 2026 Maika Namuo.
+
+alight is licensed under the GNU General Public License v3.0 or
+later. See [LICENSE](LICENSE) for the full license text.
