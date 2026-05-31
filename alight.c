@@ -87,6 +87,7 @@ static int read_attr(const char *dev, const char *attr, char *buf, int len) {
 
 	if (path_to(path, dev, attr)) return -1;
 	if (!(file = fopen(path, "r"))) return -1;
+	errno = 0;
 	if (!fgets(buf, len, file))
 		error = ferror(file) ? (errno ? errno : EIO) : EINVAL;
 	if (!error) buf[strcspn(buf, "\n")] = 0;
