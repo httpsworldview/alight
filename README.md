@@ -17,9 +17,9 @@ Values are percentages from 0 to 100 and are clamped. `alight 0`
 writes raw brightness 0, which can blank some displays.
 
 By default, `alight` scans `/sys/class/backlight` and prefers devices
-by type: `raw`, `platform`, `firmware`, then anything else; ties are
-sorted by name. Use `-d DEVICE` or `ALIGHT_DEVICE=DEVICE` to choose
-one.
+in order of: `firmware`, `platform`, `raw`, then anything else; ties
+are resolved in lexicographic order. Use `-d DEVICE` or
+`ALIGHT_DEVICE=DEVICE` to choose one.
 
 ## Build
 
