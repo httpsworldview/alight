@@ -16,6 +16,13 @@
 
 enum { NAME_LEN = 256, TYPE_LEN = 32, LINE_LEN = 64 };
 
+enum adjustment_kind { ADJUST_SET, ADJUST_UP, ADJUST_DOWN };
+
+struct adjustment {
+	enum adjustment_kind kind;
+	long percent;
+};
+
 struct light {
 	char name[NAME_LEN], type[TYPE_LEN];
 	long now, max;
@@ -29,38 +36,38 @@ static int fail(int error) {
 static int usage(FILE *out, int code) {
 	fputs("usage: alight [-d DEVICE] [N|+N|-N]\n"
 	      "       alight -l\n"
-	      "       alight -h\n",
-	      out);
+	      "       alight -h\n", out);
 	return code;
 }
 
-static long clamp(long value, long min, long max) {
-	return value < min ? min : value > max ? max : value;
+static long clamp(long value, long max) {
+	return value < 0 ? 0 : value > max ? max : value;
 }
 
 static long percent(long raw, long max) {
-	return (long)((long double)clamp(raw, 0, max) * 100 / max + 0.5L);
+	return (long)((long double)clamp(raw, max) * 100 / max + 0.5L);
 }
 
 static long raw_percent(long value, long max) {
-	value = clamp(value, 0, 100);
-	return (max / 100) * value + ((max % 100) * value + 50) / 100;
+	value = clamp(value, 100);
+	return max / 100 * value + (max % 100 * value + 50) / 100;
 }
 
-static long target_raw(const struct light *light, const char *arg, long value) {
-	long now = clamp(light->now, 0, light->max);
+static long target_raw(const struct light *light,
+                       const struct adjustment *adjustment) {
+	long max = light->max;
+	long now = clamp(light->now, max);
+	long delta = raw_percent(adjustment->percent, max);
 
-	if (*arg == '+')
-		return value >= 100
-		           ? light->max
-		           : clamp(now + raw_percent(value, light->max), 0,
-		                   light->max);
-	if (*arg == '-')
-		return value <= -100
-		           ? 0
-		           : clamp(now - raw_percent(-value, light->max), 0,
-		                   light->max);
-	return raw_percent(value, light->max);
+	switch (adjustment->kind) {
+	case ADJUST_SET:
+		return delta;
+	case ADJUST_UP:
+		return delta > max - now ? max : now + delta;
+	case ADJUST_DOWN:
+		return delta > now ? 0 : now - delta;
+	}
+	abort();
 }
 
 static int valid_name(const char *name) {
@@ -72,8 +79,8 @@ static FILE *open_attr(const char *dev, const char *attr, const char *mode) {
 	char path[sizeof SYSFS + NAME_LEN + sizeof "/max_brightness"];
 	int len = snprintf(path, sizeof path, "%s/%s/%s", SYSFS, dev, attr);
 
-	if (len < 0 || len >= (int)sizeof path) {
-		errno = ENAMETOOLONG;
+	if (len < 0 || (size_t)len >= sizeof path) {
+		errno = len < 0 ? EIO : ENAMETOOLONG;
 		return NULL;
 	}
 	return fopen(path, mode);
@@ -111,6 +118,21 @@ static int parse_number(const char *text, long *value) {
 	return errno || end == text || *end ? fail(errno ? errno : EINVAL) : 0;
 }
 
+static int parse_adjustment(const char *text, struct adjustment *adjustment) {
+	long value;
+
+	if (parse_number(text, &value))
+		return -1;
+	if (*text == '-') {
+		adjustment->kind = ADJUST_DOWN;
+		adjustment->percent = value <= -100 ? 100 : -value;
+	} else {
+		adjustment->kind = *text == '+' ? ADJUST_UP : ADJUST_SET;
+		adjustment->percent = clamp(value, 100);
+	}
+	return 0;
+}
+
 static int read_number(const char *dev, const char *attr, long *value) {
 	char buf[LINE_LEN];
 
@@ -132,21 +154,22 @@ static int write_number(const char *dev, const char *attr, long value) {
 }
 
 static int type_rank(const char *type) {
-	if (!strcmp(type, "firmware"))
-		return 0;
-	if (!strcmp(type, "platform"))
-		return 1;
-	if (!strcmp(type, "raw"))
-		return 2;
-	return 3;
+	static const char *const order[] = { "firmware", "platform", "raw" };
+
+	for (int rank = 0; rank < (int)(sizeof order / sizeof *order); rank++)
+		if (!strcmp(type, order[rank]))
+			return rank;
+	return (int)(sizeof order / sizeof *order);
 }
 
 static int load_light(struct light *light, const char *name) {
 	if (!valid_name(name))
 		return fail(EINVAL);
 	strcpy(light->name, name);
-	if (read_number(name, "max_brightness", &light->max) || light->max <= 0)
-		return fail(errno ? errno : EINVAL);
+	if (read_number(name, "max_brightness", &light->max))
+		return -1;
+	if (light->max <= 0)
+		return fail(EINVAL);
 	if (read_number(name, "brightness", &light->now))
 		return -1;
 	if (read_attr(name, "type", light->type, sizeof light->type))
@@ -155,8 +178,10 @@ static int load_light(struct light *light, const char *name) {
 }
 
 static int better_light(const struct light *a, const struct light *b) {
-	int ar = type_rank(a->type), br = type_rank(b->type);
-	return ar < br || (ar == br && strcmp(a->name, b->name) < 0);
+	int a_rank = type_rank(a->type), b_rank = type_rank(b->type);
+
+	return a_rank < b_rank ||
+	       (a_rank == b_rank && strcmp(a->name, b->name) < 0);
 }
 
 static void print_light(const struct light *light) {
@@ -169,7 +194,7 @@ static void scan_lights(struct light *best) {
 	DIR *dir = opendir(SYSFS);
 	struct dirent *entry;
 	struct light light;
-	int found = 0;
+	int error, found = 0;
 
 	if (!dir)
 		err(1, "%s", SYSFS);
@@ -182,18 +207,21 @@ static void scan_lights(struct light *best) {
 			*best = light;
 		found = 1;
 	}
-	if (errno)
+	error = errno;
+	if (closedir(dir) && !error)
+		error = errno ? errno : EIO;
+	if (error) {
+		errno = error;
 		err(1, "%s", SYSFS);
-	if (closedir(dir))
-		err(1, "%s", SYSFS);
+	}
 	if (!found)
 		errx(1, "no backlight in %s", SYSFS);
 }
 
 int main(int argc, char **argv) {
 	struct light light;
+	struct adjustment adjustment = { ADJUST_SET, 0 };
 	const char *device = getenv("ALIGHT_DEVICE"), *value_arg = NULL;
-	long value = 0;
 	int list = 0, device_arg = 0;
 
 	for (int i = 1; i < argc; i++) {
@@ -206,9 +234,9 @@ int main(int argc, char **argv) {
 			list = 1;
 			continue;
 		}
-		if (option == 'd' && ++i == argc)
-			return usage(stderr, 2);
 		if (option == 'd') {
+			if (++i == argc)
+				return usage(stderr, 2);
 			device = argv[i];
 			device_arg = 1;
 			continue;
@@ -217,24 +245,22 @@ int main(int argc, char **argv) {
 			return usage(stderr, 2);
 		value_arg = arg;
 	}
-	if (list && (value_arg || device_arg))
-		return usage(stderr, 2);
-	if (value_arg && parse_number(value_arg, &value))
-		return usage(stderr, 2);
 	if (list) {
+		if (value_arg || device_arg)
+			return usage(stderr, 2);
 		scan_lights(NULL);
 		return 0;
 	}
+	if (value_arg && parse_adjustment(value_arg, &adjustment))
+		return usage(stderr, 2);
 	if (!device_arg && (!device || !*device))
 		scan_lights(&light);
 	else if (load_light(&light, device))
 		err(1, "%s", device);
-	if (!value_arg) {
+	if (!value_arg)
 		printf("%ld\n", percent(light.now, light.max));
-		return 0;
-	}
-	if (write_number(light.name, "brightness",
-	                 target_raw(&light, value_arg, value)))
+	else if (write_number(light.name, "brightness",
+	                      target_raw(&light, &adjustment)))
 		err(1, "%s/brightness", light.name);
 	return 0;
 }
