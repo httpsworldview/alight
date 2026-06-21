@@ -230,20 +230,17 @@ int main(int argc, char **argv) {
 
 		if (option == 'h')
 			return usage(stdout, 0);
-		if (option == 'l') {
+		if (option == 'l')
 			list = 1;
-			continue;
-		}
-		if (option == 'd') {
+		else if (option == 'd') {
 			if (++i == argc)
 				return usage(stderr, 2);
 			device = argv[i];
 			device_arg = 1;
-			continue;
-		}
-		if (value_arg)
+		} else if (value_arg)
 			return usage(stderr, 2);
-		value_arg = arg;
+		else
+			value_arg = arg;
 	}
 	if (list) {
 		if (value_arg || device_arg)
